@@ -1,0 +1,119 @@
+name: Build & Deploy to AKS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+# Configure these in your repo's Settings > Variables (not secrets)
+# ACR_NAME        - Azure Container Registry name (e.g. myacr)
+# AKS_CLUSTER     - AKS cluster name
+# AKS_RG          - Azure resource group containing the AKS cluster
+# NAMESPACE       - Kubernetes namespace (optional, defaults to remote-coder)
+
+env:
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  ACR_IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/remote-coder
+  AKS_CLUSTER: ${{ vars.AKS_CLUSTER }}
+  AKS_RG: ${{ vars.AKS_RG }}
+  NAMESPACE: ${{ vars.NAMESPACE || 'remote-coder' }}
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set image tag
+        id: tag
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push with ACR
+        run: |
+          az acr build \
+            --registry ${{ env.ACR_NAME }} \
+            --image remote-coder:${{ steps.tag.outputs.tag }} \
+            --image remote-coder:latest \
+            --file Dockerfile .
+
+  deploy:
+    name: Deploy to AKS
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --name ${{ env.AKS_CLUSTER }} \
+            --resource-group ${{ env.AKS_RG }} \
+            --overwrite-existing
+
+      - name: Ensure namespace
+        run: kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create or update secrets
+        run: |
+          ARGS="--from-literal=api-key=${{ secrets.REMOTE_CODER_API_KEY }}"
+          [ -n "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ] && ARGS="$ARGS --from-literal=claude-oauth-token=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
+          [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ] && ARGS="$ARGS --from-literal=anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}"
+          [ -n "${{ secrets.ANTHROPIC_BASE_URL }}" ] && ARGS="$ARGS --from-literal=anthropic-base-url=${{ secrets.ANTHROPIC_BASE_URL }}"
+          [ -n "${{ secrets.OPENCODE_PROVIDER_API_KEY }}" ] && ARGS="$ARGS --from-literal=opencode-provider-api-key=${{ secrets.OPENCODE_PROVIDER_API_KEY }}"
+          kubectl create secret generic remote-coder-secrets \
+            --namespace ${{ env.NAMESPACE }} \
+            $ARGS \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Set image tag in deployment
+        run: |
+          TAG="${{ needs.build.outputs.image_tag }}"
+          sed -i "s|image: .*remote-coder:.*|image: ${{ env.ACR_IMAGE }}:${TAG}|" k8s/deployment.yaml
+
+      - name: Deploy
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl rollout status deployment/remote-coder \
+            -n ${{ env.NAMESPACE }} --timeout=120s
+
+      - name: Verify health
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} -l app=remote-coder -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n ${{ env.NAMESPACE }} "$POD" -- \
+            node -e "fetch('http://localhost:3333/health').then(r=>r.json()).then(d=>{console.log(JSON.stringify(d));process.exit(d.status==='ok'?0:1)})"
+          echo "Deployment healthy!"
+
+      - name: Show service IP
+        run: |
+          echo "Waiting for external IP..."
+          for i in $(seq 1 30); do
+            IP=$(kubectl get svc remote-coder -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+            if [ -n "$IP" ]; then
+              echo "Service available at: http://${IP}"
+              echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+              echo "**URL**: http://${IP}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "WARNING: External IP not yet assigned"

@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remote-coder
+  namespace: remote-coder
+  labels:
+    app: remote-coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: remote-coder
+  template:
+    metadata:
+      labels:
+        app: remote-coder
+    spec:
+      containers:
+        - name: remote-coder
+          image: YOUR_ACR.azurecr.io/remote-coder:latest  # replaced by CI/CD
+          ports:
+            - containerPort: 3333
+          env:
+            # Auth: set ONE of these. SDK mode (API key) is faster.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: anthropic-api-key
+                  optional: true
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: claude-oauth-token
+                  optional: true
+            # Optional: proxy/gateway URL for Anthropic API
+            - name: ANTHROPIC_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: anthropic-base-url
+                  optional: true
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: api-key
+            # OpenCode provider (set via OPENCODE_PROVIDER_API_KEY secret)
+            - name: OPENCODE_PROVIDER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: opencode-provider-api-key
+                  optional: true
+            - name: PORT
+              value: "3333"
+            - name: BASE_DIR
+              value: /data/workspaces
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: workspaces
+              mountPath: /data/workspaces
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3333
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3333
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload-type
+                    operator: In
+                    values:
+                      - spot
+                      - workers
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: workload-type
+                    operator: In
+                    values:
+                      - spot
+      tolerations:
+        - key: "kubernetes.azure.com/scalesetpriority"
+          operator: "Equal"
+          value: "spot"
+          effect: "NoSchedule"
+      volumes:
+        - name: workspaces
+          emptyDir: {}

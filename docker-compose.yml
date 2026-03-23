@@ -1,0 +1,15 @@
+services:
+  remote-coder:
+    build: .
+    ports:
+      - "3333:3333"
+    volumes:
+      - workspaces:/app/workspaces
+      # Mount your custom OpenCode provider config (optional)
+      # - ./config/opencode.json:/root/.config/opencode/opencode.json
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  workspaces:

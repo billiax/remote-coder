@@ -1,0 +1,8 @@
+node_modules/
+dist/
+workspaces/
+.venv/
+.playwright-mcp/
+*.png
+.env
+config/opencode.json
