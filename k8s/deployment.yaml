@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remote-coder
+  namespace: remote-coder
+  labels:
+    app: remote-coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: remote-coder
+  template:
+    metadata:
+      labels:
+        app: remote-coder
+    spec:
+      containers:
+        - name: remote-coder
+          image: acrnbtdevweu.azurecr.io/remote-coder:latest
+          ports:
+            - containerPort: 3333
+          env:
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: claude-oauth-token
+            - name: PORT
+              value: "3333"
+            - name: BASE_DIR
+              value: /data/workspaces
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: workspaces
+              mountPath: /data/workspaces
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3333
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3333
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload-type
+                    operator: In
+                    values:
+                      - spot
+                      - workers
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: workload-type
+                    operator: In
+                    values:
+                      - spot
+      tolerations:
+        - key: "kubernetes.azure.com/scalesetpriority"
+          operator: "Equal"
+          value: "spot"
+          effect: "NoSchedule"
+      volumes:
+        - name: workspaces
+          emptyDir: {}

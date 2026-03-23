@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: remote-coder
+  namespace: remote-coder
+  labels:
+    app: remote-coder
+spec:
+  type: ClusterIP
+  selector:
+    app: remote-coder
+  ports:
+    - port: 80
+      targetPort: 3333
+      protocol: TCP

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+workspaces/
+.venv/
+.playwright-mcp/
+*.png
