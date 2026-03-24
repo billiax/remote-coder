@@ -7,6 +7,16 @@ import { createAgent } from "./agent-factory";
 import { usesSdk } from "./claude-session";
 
 const app = express();
+
+// CORS — allow all origins (API is protected by API key)
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type, X-API-Key");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  if (_req.method === "OPTIONS") { res.sendStatus(200); return; }
+  next();
+});
+
 app.use(express.json({ limit: "1mb" }));
 
 // --- Configuration via env vars ---
