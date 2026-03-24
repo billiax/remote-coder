@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
-import { CodingAgent, AgentResponse, AgentOptions, HistoryMessage } from "./types";
+import { CodingAgent, AgentResponse, AgentOptions, HistoryMessage, SessionTool } from "./types";
 
 const OPENCODE_BIN = "opencode";
 
@@ -17,12 +17,16 @@ export class OpenCodeSession implements CodingAgent {
     this.model = opts.model ?? "";
   }
 
+  private tools: SessionTool[] = [];
+
   getSessionId(): string | null { return this.sessionId; }
   getWorkingDir(): string { return this.workingDir; }
   getModel(): string { return this.model || "opencode/default"; }
   getHistory(): HistoryMessage[] { return this.history; }
+  setTools(tools: SessionTool[]): void { this.tools = tools; }
+  getTools(): SessionTool[] { return this.tools; }
 
-  async send(message: string): Promise<AgentResponse> {
+  async send(message: string, _images?: any[], _imageUrls?: string[]): Promise<AgentResponse> {
     this.history.push({ role: "user", content: message, timestamp: Date.now() });
 
     const start = Date.now();

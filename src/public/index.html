@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Code Terminal</title>
+<title>Remote Coder</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -28,6 +28,9 @@
   --claude-bg: #141416;
   --danger: #c45c5c;
   --success: #5cc47a;
+  --tool-bg: #12141a;
+  --tool-border: #1c2030;
+  --tool-header: #161a24;
   --radius: 6px;
   --font-mono: 'IBM Plex Mono', monospace;
   --font-sans: 'IBM Plex Sans', sans-serif;
@@ -355,7 +358,7 @@ body {
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .chat-area::-webkit-scrollbar { width: 6px; }
@@ -383,12 +386,13 @@ body {
   font-family: var(--font-mono);
 }
 
+/* ---- Messages ---- */
 .message {
-  max-width: 80%;
-  padding: 12px 16px;
-  border-radius: var(--radius);
+  max-width: 85%;
+  padding: 14px 18px;
+  border-radius: 8px;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.7;
   animation: msgIn 0.25s ease-out;
 }
 
@@ -407,15 +411,39 @@ body {
   white-space: pre-wrap;
 }
 
+.msg-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  white-space: normal;
+}
+
+.msg-image {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: opacity 0.2s;
+  object-fit: contain;
+  background: var(--bg-deep);
+}
+
+.msg-image:hover {
+  opacity: 0.85;
+}
+
 .message.claude {
   align-self: flex-start;
   background: var(--claude-bg);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
+  max-width: 90%;
 }
 
 .message.claude .meta {
-  margin-top: 10px;
+  margin-top: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
   font-family: var(--font-mono);
@@ -426,11 +454,165 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* ---- Tool result messages (from user role) ---- */
+.message.tool-result {
+  align-self: flex-end;
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  max-width: 70%;
+  padding: 0;
+  overflow: visible;
+  line-height: normal;
+}
+
+.tool-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--tool-header);
+  border-bottom: 1px solid var(--tool-border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-result-header:hover { background: var(--bg-hover); }
+
+.tool-result-icon {
+  font-size: 11px;
+  color: var(--accent-dim);
+  flex-shrink: 0;
+}
+
+.tool-result-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+}
+
+.tool-result-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.tool-result-chevron.open { transform: rotate(90deg); }
+
+.tool-result-body {
+  padding: 10px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.5;
+  display: none;
+}
+
+.tool-result-body.open { display: block; }
+
+.tool-result-body::-webkit-scrollbar { width: 4px; }
+.tool-result-body::-webkit-scrollbar-track { background: transparent; }
+.tool-result-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ---- Tool calls inside assistant messages ---- */
+.tool-call-block {
+  margin: 10px 0;
+  border: 1px solid var(--tool-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--tool-bg);
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--tool-header);
+  border-bottom: 1px solid var(--tool-border);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tool-call-header:hover { background: var(--bg-hover); }
+
+.tool-call-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.tool-call-icon.tool-use {
+  background: rgba(92, 129, 196, 0.15);
+  color: #7b9fd4;
+}
+
+.tool-call-icon.tool-result-inline {
+  background: rgba(92, 196, 122, 0.15);
+  color: var(--success);
+}
+
+.tool-call-icon.tool-error {
+  background: rgba(196, 92, 92, 0.15);
+  color: var(--danger);
+}
+
+.tool-call-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.tool-call-name {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.tool-call-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.tool-call-chevron.open { transform: rotate(90deg); }
+
+.tool-call-body {
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  line-height: 1.5;
+  display: none;
+}
+
+.tool-call-body.open { display: block; }
+
+.tool-call-body::-webkit-scrollbar { width: 4px; }
+.tool-call-body::-webkit-scrollbar-track { background: transparent; }
+.tool-call-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
 /* Markdown inside claude messages */
 .message.claude h1, .message.claude h2, .message.claude h3 {
   font-family: var(--font-sans);
   font-weight: 600;
-  margin: 12px 0 6px;
+  margin: 14px 0 6px;
   color: var(--text-primary);
 }
 
@@ -465,6 +647,7 @@ body {
   border: none;
   line-height: 1.55;
   white-space: pre;
+  overflow-x: auto;
 }
 
 .message.claude a {
@@ -490,6 +673,19 @@ body {
 .message.claude th {
   background: var(--bg-surface);
   font-weight: 500;
+}
+
+.message.claude blockquote {
+  border-left: 3px solid var(--accent-dim);
+  padding-left: 14px;
+  color: var(--text-secondary);
+  margin: 8px 0;
+}
+
+.message.claude hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
 }
 
 /* Loading indicator */
@@ -694,13 +890,13 @@ body {
 
 <aside class="sidebar">
   <div class="sidebar-header">
-    <div class="sidebar-logo">Claude Code</div>
+    <div class="sidebar-logo">Remote Coder</div>
     <button class="btn-new" onclick="showNewChatModal()">+ new session</button>
   </div>
   <div class="session-list" id="sessionList"></div>
   <div class="sidebar-footer">
     <span>sessions are in-memory</span>
-    <button class="btn-api-help" onclick="showApiModal()">api docs</button>
+    <button class="btn-api-help" onclick="window.open('/api-docs','_blank')">api docs</button>
     <button class="btn-api-help" onclick="logout()">logout</button>
   </div>
 </aside>
@@ -730,12 +926,10 @@ let activeSessionId = null;
 let sending = false;
 
 // --- API Key ---
-// Pick up key from ?apiKey= param, then localStorage
 const urlKey = new URLSearchParams(location.search).get('apiKey');
 let apiKey = urlKey || localStorage.getItem('apiKey') || '';
 if (urlKey) {
   localStorage.setItem('apiKey', urlKey);
-  // Clean URL so key isn't visible in address bar
   history.replaceState(null, '', location.pathname);
 }
 
@@ -787,6 +981,161 @@ marked.setOptions({
   gfm: true,
 });
 
+// --- Message content parsing ---
+// Detects tool result messages: "[TOOL RESULT: <name>]" or quoted version
+function isToolResultMessage(content) {
+  const s = content.trim().replace(/^["']|["']$/g, '');
+  return /^\[TOOL RESULT:\s*\w+/.test(s);
+}
+
+// Parse tool result: extract name and body
+function parseToolResult(content) {
+  // Strip surrounding quotes if present
+  let s = content.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  const match = s.match(/^\[TOOL RESULT:\s*(\w+)\]\s*([\s\S]*)$/);
+  if (!match) return null;
+  return { name: match[1], body: match[2].trim() };
+}
+
+// Parse assistant message content into segments: text, tool_use, tool_result
+function parseAssistantContent(content) {
+  if (!content) return [];
+
+  const segments = [];
+  // Split on tool code fences: ```tool:name ... ```
+  // and also on inline tool patterns
+  const lines = content.split('\n');
+  let currentText = [];
+  let inToolBlock = false;
+  let toolName = '';
+  let toolBody = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Start of a tool code fence: ```tool:name
+    const toolStart = line.match(/^```tool:(\S+)\s*$/);
+    if (toolStart && !inToolBlock) {
+      // Flush current text
+      if (currentText.length > 0) {
+        const text = currentText.join('\n').trim();
+        if (text) segments.push({ type: 'text', content: text });
+        currentText = [];
+      }
+      inToolBlock = true;
+      toolName = toolStart[1];
+      toolBody = [];
+      continue;
+    }
+
+    // End of tool code fence
+    if (inToolBlock && line.trim() === '```') {
+      segments.push({ type: 'tool_use', name: toolName, content: toolBody.join('\n') });
+      inToolBlock = false;
+      toolName = '';
+      toolBody = [];
+      continue;
+    }
+
+    if (inToolBlock) {
+      toolBody.push(line);
+    } else {
+      currentText.push(line);
+    }
+  }
+
+  // Flush remaining
+  if (inToolBlock) {
+    // Unclosed tool block — treat as tool anyway
+    segments.push({ type: 'tool_use', name: toolName, content: toolBody.join('\n') });
+  }
+  if (currentText.length > 0) {
+    const text = currentText.join('\n').trim();
+    if (text) segments.push({ type: 'text', content: text });
+  }
+
+  return segments;
+}
+
+// Render a single tool block (used in both tool results and tool calls)
+let toolBlockCounter = 0;
+
+function renderToolBlock(type, name, body, defaultOpen = false) {
+  const id = 'tb-' + (++toolBlockCounter);
+  const iconClass = type === 'tool_use' ? 'tool-use' : (body && /error/i.test(body.slice(0, 50)) ? 'tool-error' : 'tool-result-inline');
+  const iconSymbol = type === 'tool_use' ? '&#9654;' : '&#10003;';
+  const label = type === 'tool_use' ? 'tool' : 'result';
+  const openClass = defaultOpen ? ' open' : '';
+
+  return `<div class="tool-call-block">
+    <div class="tool-call-header" onclick="toggleToolBlock('${id}')">
+      <div class="tool-call-icon ${iconClass}">${iconSymbol}</div>
+      <span class="tool-call-label">${esc(label)}</span>
+      <span class="tool-call-name">${esc(name)}</span>
+      <span class="tool-call-chevron${openClass}" id="${id}-chev">&#9656;</span>
+    </div>
+    <div class="tool-call-body${openClass}" id="${id}-body">${esc(body)}</div>
+  </div>`;
+}
+
+function toggleToolBlock(id) {
+  const body = document.getElementById(id + '-body');
+  const chev = document.getElementById(id + '-chev');
+  if (body && chev) {
+    body.classList.toggle('open');
+    chev.classList.toggle('open');
+  }
+}
+
+function renderMessageContent(content, role, imageUrls) {
+  if (role === 'user') {
+    // Check if this is a tool result message
+    const toolResult = parseToolResult(content);
+    if (toolResult) {
+      const id = 'tr-' + (++toolBlockCounter);
+      return `<div class="message tool-result">
+        <div class="tool-result-header" onclick="toggleToolBlock('${id}')">
+          <span class="tool-result-icon">&#8617;</span>
+          <span class="tool-result-name">${esc(toolResult.name)}</span>
+          <span class="tool-result-chevron" id="${id}-chev">&#9656;</span>
+        </div>
+        <div class="tool-result-body" id="${id}-body">${esc(toolResult.body)}</div>
+      </div>`;
+    }
+    // Regular user message — with optional images
+    let imgsHtml = '';
+    if (imageUrls && imageUrls.length > 0) {
+      imgsHtml = imageUrls.map(url =>
+        `<img src="${esc(url)}" class="msg-image" onclick="window.open(this.src,'_blank')" title="click to open full size">`
+      ).join('');
+      imgsHtml = `<div class="msg-images">${imgsHtml}</div>`;
+    }
+    return `<div class="message user">${imgsHtml}${esc(content)}</div>`;
+  }
+
+  // Assistant message — parse into segments
+  const segments = parseAssistantContent(content);
+
+  if (segments.length === 0) {
+    // Completely empty — don't render
+    return '';
+  }
+
+  let inner = '';
+  for (const seg of segments) {
+    if (seg.type === 'text') {
+      inner += marked.parse(seg.content);
+    } else if (seg.type === 'tool_use') {
+      inner += renderToolBlock('tool_use', seg.name, seg.content);
+    }
+  }
+
+  return inner;
+}
+
 // --- Sessions ---
 async function fetchSessions() {
   try {
@@ -823,8 +1172,11 @@ function renderSessionList() {
   }).join('');
 }
 
-async function switchSession(id) {
+async function switchSession(id, skipPush) {
   activeSessionId = id;
+  if (!skipPush && !id.startsWith('pending-')) {
+    history.pushState({ sessionId: id }, '', '/s/' + id);
+  }
   renderSessionList();
   updateHeader();
   document.getElementById('messageInput').disabled = false;
@@ -841,6 +1193,7 @@ async function switchSession(id) {
           role: m.role === 'system' ? 'claude' : m.role,
           content: m.content,
           meta: m.durationMs != null ? { durationMs: m.durationMs, costUsd: m.costUsd } : undefined,
+          imageUrls: m.imageUrls || undefined,
         }));
       }
     } catch (e) {}
@@ -857,6 +1210,7 @@ async function deleteSession(id) {
   delete sessions[id];
   if (activeSessionId === id) {
     activeSessionId = null;
+    history.pushState(null, '', '/');
     document.getElementById('messageInput').disabled = true;
     document.getElementById('sendBtn').disabled = true;
     document.getElementById('chatArea').innerHTML = '<div class="empty-state"><div class="empty-state-icon">&gt;_</div><p>start a session to begin</p></div>';
@@ -889,21 +1243,40 @@ function renderChat() {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&gt;_</div><p>send your first message</p></div>';
     return;
   }
+
+  // Reset tool block counter for consistent IDs
+  toolBlockCounter = 0;
+
   el.innerHTML = msgs.map(m => {
+    const rendered = renderMessageContent(m.content, m.role === 'claude' ? 'assistant' : m.role, m.imageUrls);
+
     if (m.role === 'user') {
-      return `<div class="message user">${esc(m.content)}</div>`;
-    } else {
-      let html = `<div class="message claude">${marked.parse(m.content)}`;
+      return rendered;
+    }
+
+    // Assistant message — wrap in claude div with meta
+    if (!rendered) {
+      // Skip completely empty assistant messages
       if (m.meta) {
-        html += `<div class="meta">
+        return `<div class="message claude"><div class="meta">
           <span>${(m.meta.durationMs / 1000).toFixed(1)}s</span>
           <span>$${m.meta.costUsd.toFixed(4)}</span>
-        </div>`;
+        </div></div>`;
       }
-      html += '</div>';
-      return html;
+      return '';
     }
+
+    let html = `<div class="message claude">${rendered}`;
+    if (m.meta) {
+      html += `<div class="meta">
+        <span>${(m.meta.durationMs / 1000).toFixed(1)}s</span>
+        <span>$${m.meta.costUsd.toFixed(4)}</span>
+      </div>`;
+    }
+    html += '</div>';
+    return html;
   }).join('');
+
   el.scrollTop = el.scrollHeight;
 }
 
@@ -949,7 +1322,13 @@ async function sendMessage() {
         sessions[data.sessionId] = session;
         delete sessions[activeSessionId];
         activeSessionId = data.sessionId;
+        history.replaceState({ sessionId: activeSessionId }, '', '/s/' + activeSessionId);
         renderSessionList();
+      }
+      // Attach imageUrls to the preceding user message if present
+      if (data.imageUrls && data.imageUrls.length > 0) {
+        const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user');
+        if (lastUserMsg) lastUserMsg.imageUrls = data.imageUrls;
       }
       session.messages.push({
         role: 'claude',
@@ -1028,73 +1407,128 @@ function showApiModal() {
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
       <div class="modal modal-wide">
         <h3>API Reference</h3>
-        <p>interact with sessions programmatically — all endpoints return JSON</p>
+        <p>all endpoints return JSON — set <code>X-API-Key</code> header if auth is enabled</p>
 
         <div class="api-section">
-          <h4>Start a new session</h4>
+          <h4>Send a message</h4>
           <span class="method">POST</span><span class="endpoint">/chat</span>
-          <div class="api-code"><span class="cm"># Claude engine (default)</span>
+          <div class="api-code"><span class="cm"># Start a new session</span>
 curl -X POST ${esc(host)}/chat \\
   -H "Content-Type: application/json" \\
   -H "<span class="hl">X-API-Key</span>: YOUR_KEY" \\
   -d '{
     <span class="hl">"message"</span>: "create a hello.ts file",
     <span class="hl">"workspace"</span>: "my-project",
-    <span class="hl">"engine"</span>: "claude",
-    <span class="hl">"model"</span>: "sonnet"
+    <span class="hl">"model"</span>: "sonnet",
+    <span class="hl">"engine"</span>: "claude"
   }'
 
-<span class="cm"># OpenCode engine with GPT-5</span>
+<span class="cm"># Continue an existing session</span>
 curl -X POST ${esc(host)}/chat \\
   -H "Content-Type: application/json" \\
-  -H "<span class="hl">X-API-Key</span>: YOUR_KEY" \\
-  -d '{
-    <span class="hl">"message"</span>: "build a REST API",
-    <span class="hl">"workspace"</span>: "my-project",
-    <span class="hl">"engine"</span>: "opencode",
-    <span class="hl">"model"</span>: "billiax/gpt-5"
-  }'
-
-<span class="cm"># Response</span>
-{ "sessionId": "abc-123", "response": "...",
-  "durationMs": 5000, "costUsd": 0.05,
-  "workspace": "my-project", "model": "sonnet",
-  "engine": "claude" }</div>
-          <div class="desc">
-            <b>engine</b>: "claude" | "opencode" (default: claude)<br>
-            <b>model</b>: claude → "sonnet" | "opus" | "haiku" or any model ID<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;opencode → "billiax/gpt-5" | "billiax/gpt-5.3-codex" | etc.<br>
-            <b>workspace</b>: directory name under the workspaces folder
-          </div>
-        </div>
-
-        <div class="api-section">
-          <h4>Continue a session</h4>
-          <span class="method">POST</span><span class="endpoint">/chat</span>
-          <div class="api-code">curl -X POST ${esc(host)}/chat \\
-  -H "Content-Type: application/json" \\
-  -H "<span class="hl">X-API-Key</span>: YOUR_KEY" \\
   -d '{
     <span class="hl">"message"</span>: "now add tests",
     <span class="hl">"sessionId"</span>: "abc-123",
     <span class="hl">"workspace"</span>: "my-project"
   }'
-<span class="cm"># engine is remembered from session creation</span></div>
+
+<span class="cm"># With images (base64)</span>
+curl -X POST ${esc(host)}/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "message": "describe this screenshot",
+    "sessionId": "abc-123",
+    "workspace": "my-project",
+    <span class="hl">"images"</span>: [{
+      "data": "iVBORw0KGgo...",
+      "media_type": "image/png"
+    }]
+  }'
+
+<span class="cm"># With ephemeral tools (one message only)</span>
+curl -X POST ${esc(host)}/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "message": "check the page",
+    "sessionId": "abc-123",
+    "workspace": "my-project",
+    <span class="hl">"tools"</span>: [{
+      "name": "page_snapshot",
+      "description": "Returns page structure"
+    }]
+  }'</div>
+          <div class="desc">
+            <b>message</b> (required): text to send<br>
+            <b>workspace</b> (required for new): directory name<br>
+            <b>sessionId</b>: continue an existing session<br>
+            <b>engine</b>: "claude" (default) | "opencode"<br>
+            <b>model</b>: "sonnet" | "opus" | "haiku" | full model ID<br>
+            <b>images</b>: array of { data: base64, media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp" }<br>
+            <b>tools</b>: ephemeral tool definitions (one turn only)
+          </div>
+        </div>
+
+        <div class="api-section">
+          <h4>Response shape</h4>
+          <div class="api-code">{
+  "sessionId": "abc-123",
+  "response": "Here's the file I created...",
+  "isError": false,
+  "durationMs": 5000,
+  "costUsd": 0.05,
+  "workspace": "my-project",
+  "model": "sonnet",
+  "engine": "claude",
+  <span class="hl">"imageUrls"</span>: ["/images/my-project/img-123.png"]
+}
+<span class="cm"># imageUrls only present when images were sent</span></div>
+        </div>
+
+        <div class="api-section">
+          <h4>Set persistent tools</h4>
+          <span class="method">PUT</span><span class="endpoint">/sessions/:id/tools</span>
+          <div class="api-code">curl -X PUT ${esc(host)}/sessions/<span class="hl">abc-123</span>/tools \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    <span class="hl">"tools"</span>: [
+      { "name": "page_snapshot",
+        "description": "Returns page structure" },
+      { "name": "evaluate_js",
+        "description": "Runs JS in browser",
+        "parameters": {
+          "code": { "type": "string",
+                    "required": true }
+        } }
+    ]
+  }'
+<span class="cm"># Persists in system prompt, survives compaction.</span>
+<span class="cm"># Send { "tools": [] } to clear all tools.</span></div>
+          <div class="desc">
+            <b>Persistent</b> tools live in the system prompt and survive compaction.<br>
+            <b>Ephemeral</b> tools sent in <code>/chat</code> body apply to one message only.<br>
+            Claude outputs tool calls as <code>\`\`\`tool:name</code> blocks.<br>
+            Send results back as: <code>[TOOL RESULT: name] ...</code>
+          </div>
+        </div>
+
+        <div class="api-section">
+          <h4>Get session tools</h4>
+          <span class="method">GET</span><span class="endpoint">/sessions/:id/tools</span>
+          <div class="api-code">curl ${esc(host)}/sessions/<span class="hl">abc-123</span>/tools</div>
         </div>
 
         <div class="api-section">
           <h4>Get session history</h4>
           <span class="method">GET</span><span class="endpoint">/sessions/:id/history</span>
           <div class="api-code">curl ${esc(host)}/sessions/<span class="hl">abc-123</span>/history
-
-<span class="cm"># Returns all messages with timestamps, cost, duration</span></div>
+<span class="cm"># Returns messages with timestamps, cost, duration, imageUrls</span></div>
         </div>
 
         <div class="api-section">
           <h4>Compact session context</h4>
           <span class="method">POST</span><span class="endpoint">/sessions/:id/compact</span>
-          <div class="api-code">curl -X POST ${esc(host)}/sessions/<span class="hl">abc-123</span>/compact</div>
-          <div class="desc">Compresses the conversation context to free up token space.</div>
+          <div class="api-code">curl -X POST ${esc(host)}/sessions/<span class="hl">abc-123</span>/compact
+<span class="cm"># Auto-compact triggers at 200K input tokens</span></div>
         </div>
 
         <div class="api-section">
@@ -1211,8 +1645,50 @@ function updateModelPresets() {
   input.placeholder = engine === 'claude' ? 'sonnet, opus, haiku, or model ID' : 'billiax/gpt-5, or provider/model';
 }
 
+// --- URL routing ---
+function getSessionIdFromUrl() {
+  const match = location.pathname.match(/^\/s\/([a-f0-9-]+)$/);
+  return match ? match[1] : null;
+}
+
+window.addEventListener('popstate', (e) => {
+  const id = e.state?.sessionId || getSessionIdFromUrl();
+  if (id && sessions[id]) {
+    switchSession(id, true);
+  } else if (!id) {
+    activeSessionId = null;
+    renderSessionList();
+    document.getElementById('chatArea').innerHTML = '<div class="empty-state"><div class="empty-state-icon">&gt;_</div><p>start a session to begin</p></div>';
+    document.getElementById('messageInput').disabled = true;
+    document.getElementById('sendBtn').disabled = true;
+    updateHeader();
+  }
+});
+
 // --- Init ---
-fetchSessions();
+fetchSessions().then(async () => {
+  const urlSessionId = getSessionIdFromUrl();
+  if (urlSessionId) {
+    if (!sessions[urlSessionId]) {
+      // Session not in sidebar yet — try to load it from server
+      try {
+        const res = await authFetch(`${API}/sessions/${urlSessionId}/history`);
+        if (res.ok) {
+          const data = await res.json();
+          sessions[urlSessionId] = {
+            workspace: data.workspace || 'unknown',
+            model: data.model || 'sonnet',
+            messages: [],
+          };
+          renderSessionList();
+        }
+      } catch (e) {}
+    }
+    if (sessions[urlSessionId]) {
+      await switchSession(urlSessionId, true);
+    }
+  }
+});
 </script>
 </body>
 </html>

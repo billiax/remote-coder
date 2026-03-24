@@ -17,7 +17,13 @@
     "@types/node": "^25.5.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "pg": "^8.20.0",
+    "swagger-ui-express": "^5.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "@types/swagger-ui-express": "^4.1.8"
   }
 }

@@ -79,6 +79,7 @@ jobs:
           [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ] && ARGS="$ARGS --from-literal=anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}"
           [ -n "${{ secrets.ANTHROPIC_BASE_URL }}" ] && ARGS="$ARGS --from-literal=anthropic-base-url=${{ secrets.ANTHROPIC_BASE_URL }}"
           [ -n "${{ secrets.OPENCODE_PROVIDER_API_KEY }}" ] && ARGS="$ARGS --from-literal=opencode-provider-api-key=${{ secrets.OPENCODE_PROVIDER_API_KEY }}"
+          [ -n "${{ secrets.DATABASE_URL }}" ] && ARGS="$ARGS --from-literal=database-url=${{ secrets.DATABASE_URL }}"
           kubectl create secret generic remote-coder-secrets \
             --namespace ${{ env.NAMESPACE }} \
             $ARGS \

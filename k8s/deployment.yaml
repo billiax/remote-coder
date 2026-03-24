@@ -53,6 +53,13 @@ spec:
                   name: remote-coder-secrets
                   key: opencode-provider-api-key
                   optional: true
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: remote-coder-secrets
+                  key: database-url
+                  optional: true
             - name: PORT
               value: "3333"
             - name: BASE_DIR
