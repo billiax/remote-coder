@@ -45,11 +45,11 @@ export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
   let toolsSection = "";
   if (tools && tools.length > 0) {
     const lines: string[] = [];
-    lines.push(`SESSION TOOLS (IMPORTANT — read carefully):`);
-    lines.push(`The user has provided the following external tools for this session.`);
-    lines.push(`To invoke a tool, write ONLY the tool call as a fenced code block and STOP. Do NOT continue writing after the tool call.`);
-    lines.push(`The user's system will execute the tool and send back the result in the next message as [TOOL RESULT: <tool_name>].`);
-    lines.push(`You must NEVER fabricate, guess, or hallucinate tool results. ALWAYS wait for the actual result from the user.`);
+    lines.push(`CRITICAL — SESSION TOOLS:`);
+    lines.push(`You have access to the tools listed below. Do NOT attempt to use MCP tools, Playwright tools, or any built-in browser tools — they will be blocked. Instead, use ONLY the session tools defined here.`);
+    lines.push(`These session tools work by TEXT OUTPUT: you write a fenced code block in your response and the remote system executes it. No permissions, no MCP, no function calls — just text.`);
+    lines.push(`The remote system reads your text output, detects the tool call block, executes the tool, and sends the result back in the next message as [TOOL RESULT: <tool_name>].`);
+    lines.push(`You must NEVER fabricate, guess, or hallucinate tool results. ALWAYS wait for the actual result.`);
     lines.push(`After receiving a tool result, you may then respond to the user or call another tool.`);
     lines.push(``);
     lines.push(`Available tools:`);
@@ -63,17 +63,23 @@ export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
       }
     }
     lines.push(``);
-    lines.push(`To call a tool, output EXACTLY this format and nothing else after it:`);
+    lines.push(`To call a tool, output EXACTLY this format in your response and nothing else after it:`);
     lines.push('```tool:<tool_name>');
     lines.push('<optional arguments or content>');
     lines.push('```');
+    lines.push(``);
+    lines.push(`Example — to take a browser snapshot, just write this in your reply:`);
+    lines.push('```tool:page_snapshot');
+    lines.push('```');
+    lines.push(`Then STOP and wait. The system will execute it and send the result back.`);
     lines.push(``);
     lines.push(`Rules:`);
     lines.push(`1. After outputting a tool call block, STOP immediately. Do not write any text after it.`);
     lines.push(`2. Wait for [TOOL RESULT: <tool_name>] in the next user message before continuing.`);
     lines.push(`3. You may include brief text BEFORE a tool call to explain what you're doing.`);
     lines.push(`4. Never invent tool output. If you don't have a result, you haven't called the tool yet.`);
-    lines.push(`5. These tool definitions survive compaction.`);
+    lines.push(`5. These are your tools to use freely — no permissions or MCP registration needed.`);
+    lines.push(`6. These tool definitions survive compaction.`);
     toolsSection = lines.join("\n");
   }
 
@@ -353,17 +359,30 @@ export class ClaudeSession implements CodingAgent {
       effectiveMessage = `${imgRefs}\n\n${message}`;
     }
 
+    const hasSessionTools = allTools && allTools.length > 0;
     const args = [
       "-p", effectiveMessage,
       "--output-format", "json",
       "--model", this.model,
-      "--tools", AVAILABLE_TOOLS.join(","),
-      "--allowedTools", ...ALLOWED_TOOL_PATTERNS,
+      "--tools", hasSessionTools ? "" : AVAILABLE_TOOLS.join(","),
       "--permission-mode", "dontAsk",
       "--append-system-prompt", buildSystemPrompt(this.workingDir, allTools),
     ];
 
-    if (this.mcpConfig) {
+    if (!hasSessionTools) {
+      args.push("--allowedTools", ...ALLOWED_TOOL_PATTERNS);
+    }
+
+    // When session tools are defined, use --bare + --strict-mcp-config with an
+    // empty config to prevent Claude from loading plugins/MCP servers that
+    // compete with text-based session tools.
+    if (hasSessionTools) {
+      args.push("--bare", "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config");
+    }
+
+    // Only load MCP config if no session tools are defined — otherwise Claude
+    // tries to use MCP tools (which get blocked) instead of text-based session tools.
+    if (this.mcpConfig && (!allTools || allTools.length === 0)) {
       args.push("--mcp-config", this.mcpConfig);
     }
     args.push(...this.extraArgs);
