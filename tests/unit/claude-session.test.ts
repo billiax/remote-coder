@@ -149,3 +149,76 @@ After.`;
     expect(result.toolCall).toBe("my.tool");
   });
 });
+
+describe("buildSystemPrompt with ephemeral + persistent tools merged", () => {
+  it("includes all tools when both persistent and ephemeral are passed", () => {
+    const tools: SessionTool[] = [
+      { name: "persistent_tool", description: "A persistent tool" },
+      { name: "ephemeral_tool", description: "An ephemeral tool" },
+    ];
+    const prompt = buildSystemPrompt("/workspace/test", tools);
+    expect(prompt).toContain("persistent_tool");
+    expect(prompt).toContain("A persistent tool");
+    expect(prompt).toContain("ephemeral_tool");
+    expect(prompt).toContain("An ephemeral tool");
+    expect(prompt).toContain("SESSION TOOLS");
+  });
+
+  it("includes invocation instructions for merged tools", () => {
+    const tools: SessionTool[] = [
+      { name: "tool_a", description: "First tool" },
+      { name: "tool_b", description: "Second tool" },
+    ];
+    const prompt = buildSystemPrompt("/workspace/test", tools);
+    expect(prompt).toContain("```tool:");
+    expect(prompt).toContain("STOP immediately");
+    expect(prompt).toContain("tool_a");
+    expect(prompt).toContain("tool_b");
+  });
+
+  it("includes parameters from both tools", () => {
+    const tools: SessionTool[] = [
+      {
+        name: "search",
+        description: "Search tool",
+        parameters: { query: { type: "string", description: "Search query", required: true } },
+      },
+      {
+        name: "fetch_url",
+        description: "Fetch a URL",
+        parameters: { url: { type: "string", description: "The URL", required: true } },
+      },
+    ];
+    const prompt = buildSystemPrompt("/workspace/test", tools);
+    expect(prompt).toContain("query");
+    expect(prompt).toContain("Search query");
+    expect(prompt).toContain("url");
+    expect(prompt).toContain("The URL");
+  });
+});
+
+describe("truncateAfterToolCall with merged tool names", () => {
+  it("truncates for ephemeral tool names in combined list", () => {
+    const text = `Calling ephemeral tool.
+\`\`\`tool:ephemeral_search
+query: test
+\`\`\`
+Hallucinated results here.`;
+    const allToolNames = ["persistent_tool", "ephemeral_search"];
+    const result = truncateAfterToolCall(text, allToolNames);
+    expect(result.toolCall).toBe("ephemeral_search");
+    expect(result.text).not.toContain("Hallucinated results");
+  });
+
+  it("truncates for persistent tool names in combined list", () => {
+    const text = `Using persistent tool.
+\`\`\`tool:persistent_tool
+data: value
+\`\`\`
+Should be removed.`;
+    const allToolNames = ["persistent_tool", "ephemeral_tool"];
+    const result = truncateAfterToolCall(text, allToolNames);
+    expect(result.toolCall).toBe("persistent_tool");
+    expect(result.text).not.toContain("Should be removed");
+  });
+});
