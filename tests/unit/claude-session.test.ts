@@ -32,7 +32,7 @@ describe("buildSystemPrompt", () => {
   it("includes session log documentation", () => {
     const prompt = buildSystemPrompt("/workspace/test-project");
     expect(prompt).toContain(".session-log");
-    expect(prompt).toContain("SESSION LOG");
+    expect(prompt).toContain("SESSION CONTINUITY");
   });
 
   it("includes absolute path requirement", () => {

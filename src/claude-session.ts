@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, appendFileSync } from "fs";
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from "fs";
 import path from "path";
 import { CodingAgent, AgentResponse, AgentOptions, HistoryMessage, SessionTool, ImageInput } from "./types";
 
@@ -34,23 +34,17 @@ const ALLOWED_TOOL_PATTERNS = [
   "mcp__context7__query-docs",
 ];
 
+const SYSTEM_PROMPT_TEMPLATE = readFileSync(
+  path.join(__dirname, "system-prompt.md"),
+  "utf-8"
+);
+
 export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
   const logDir = path.join(dir, ".session-log");
-  const lines = [
-    `You are working inside the directory: ${dir}`,
-    `All file paths must be absolute and within ${dir}.`,
-    `The user does NOT have direct access to this directory or its files.`,
-    `Always include relevant file contents, command outputs, and results directly in your response.`,
-    `When you read, create, or modify files, show the user the content in your reply.`,
-    `Use Context7 MCP tools when you need documentation for libraries.`,
-    ``,
-    `SESSION LOG: Every message (user and assistant) is automatically logged to ${logDir}/ as timestamped .txt files.`,
-    `If the conversation context has been compacted and you need to recall earlier messages, read files in ${logDir}/ to find historical content.`,
-    `Log files are named like: 2026-03-24T09-15-30-user.txt and 2026-03-24T09-15-30-assistant.txt`,
-  ];
 
+  let toolsSection = "";
   if (tools && tools.length > 0) {
-    lines.push(``);
+    const lines: string[] = [];
     lines.push(`SESSION TOOLS (IMPORTANT — read carefully):`);
     lines.push(`The user has provided the following external tools for this session.`);
     lines.push(`To invoke a tool, write ONLY the tool call as a fenced code block and STOP. Do NOT continue writing after the tool call.`);
@@ -80,9 +74,14 @@ export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
     lines.push(`3. You may include brief text BEFORE a tool call to explain what you're doing.`);
     lines.push(`4. Never invent tool output. If you don't have a result, you haven't called the tool yet.`);
     lines.push(`5. These tool definitions survive compaction.`);
+    toolsSection = lines.join("\n");
   }
 
-  return lines.join("\n");
+  return SYSTEM_PROMPT_TEMPLATE
+    .replace(/\{\{DIR\}\}/g, dir)
+    .replace(/\{\{LOG_DIR\}\}/g, logDir)
+    .replace(/\{\{TOOLS_SECTION\}\}/g, toolsSection)
+    .trimEnd();
 }
 
 /**
@@ -230,12 +229,20 @@ export class ClaudeSession implements CodingAgent {
     if (images && images.length > 0) {
       const contentBlocks: any[] = [];
       for (const img of images) {
+        // Strip data-URI prefix if present (e.g. "data:image/png;base64,...")
+        let data = img.data;
+        let mediaType = img.media_type;
+        const uriMatch = data?.match(/^data:(image\/\w+);base64,(.+)$/s);
+        if (uriMatch) {
+          if (!mediaType) mediaType = uriMatch[1] as any;
+          data = uriMatch[2];
+        }
         contentBlocks.push({
           type: "image",
           source: {
             type: "base64",
-            media_type: img.media_type,
-            data: img.data,
+            media_type: mediaType,
+            data: data,
           },
         });
       }

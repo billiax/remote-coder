@@ -75,6 +75,33 @@ async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS request_logs (
+      id            SERIAL PRIMARY KEY,
+      session_id    TEXT,
+      endpoint      TEXT NOT NULL,
+      workspace     TEXT,
+      engine        TEXT,
+      model         TEXT,
+      has_images    BOOLEAN NOT NULL DEFAULT false,
+      image_count   INTEGER,
+      image_meta    JSONB,
+      status        TEXT NOT NULL DEFAULT 'ok',
+      error_message TEXT,
+      duration_ms   INTEGER,
+      cost_usd      DOUBLE PRECISION,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_request_logs_status ON request_logs(status) WHERE status != 'ok';
+  `);
+
   console.log("[db] Schema ready");
 }
 
@@ -119,6 +146,43 @@ export async function recordActivity(
          total_turns = total_turns + 1
      WHERE session_id = $1`,
     [sessionId, costUsd],
+  );
+}
+
+// ─── Request log helpers ───
+
+export async function logRequest(opts: {
+  sessionId?: string;
+  endpoint: string;
+  workspace?: string;
+  engine?: string;
+  model?: string;
+  hasImages: boolean;
+  imageCount?: number;
+  imageMeta?: { index: number; media_type: string; base64_length: number; estimated_mb: string }[];
+  status: "ok" | "error" | "validation_error";
+  errorMessage?: string;
+  durationMs?: number;
+  costUsd?: number;
+}): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO request_logs (session_id, endpoint, workspace, engine, model, has_images, image_count, image_meta, status, error_message, duration_ms, cost_usd)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      opts.sessionId ?? null,
+      opts.endpoint,
+      opts.workspace ?? null,
+      opts.engine ?? null,
+      opts.model ?? null,
+      opts.hasImages,
+      opts.imageCount ?? null,
+      opts.imageMeta ? JSON.stringify(opts.imageMeta) : null,
+      opts.status,
+      opts.errorMessage ?? null,
+      opts.durationMs ?? null,
+      opts.costUsd ?? null,
+    ],
   );
 }
 

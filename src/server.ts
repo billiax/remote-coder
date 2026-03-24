@@ -5,7 +5,7 @@ import { existsSync, mkdirSync } from "fs";
 import { CodingAgent, EngineType } from "./types";
 import { createAgent } from "./agent-factory";
 import { usesSdk } from "./claude-session";
-import { initDb, upsertSession, recordActivity, deleteSessionDb, listSessionsDb } from "./db";
+import { initDb, upsertSession, recordActivity, deleteSessionDb, listSessionsDb, logRequest } from "./db";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./swagger";
 
@@ -179,17 +179,100 @@ app.post("/chat", async (req: Request, res: Response<ChatResponse | ErrorRespons
     }
   }
 
-  // Save images to workspace and collect URLs for the frontend
+  // Helpers for request logging
+  const requestStart = Date.now();
+  const hasImages = images && Array.isArray(images) && images.length > 0;
+  const imageMeta: { index: number; media_type: string; base64_length: number; estimated_mb: string }[] = [];
+
+  const logReq = (status: "ok" | "error" | "validation_error", extra?: { errorMessage?: string; sessionId?: string; durationMs?: number; costUsd?: number }) => {
+    logRequest({
+      sessionId: extra?.sessionId ?? sessionId,
+      endpoint: "/chat",
+      workspace: workspace ?? path.basename(agent?.getWorkingDir?.() ?? ""),
+      engine: engine ?? DEFAULT_ENGINE,
+      model: model ?? agent?.getModel?.() ?? "",
+      hasImages: !!hasImages,
+      imageCount: hasImages ? images!.length : undefined,
+      imageMeta: imageMeta.length > 0 ? imageMeta : undefined,
+      status,
+      errorMessage: extra?.errorMessage,
+      durationMs: extra?.durationMs ?? (Date.now() - requestStart),
+      costUsd: extra?.costUsd,
+    }).catch(e => console.error(`[request-log] Failed to log: ${e.message}`));
+  };
+
+  // Validate & sanitize images
   const imageUrls: string[] = [];
-  if (images && Array.isArray(images) && images.length > 0) {
+  if (hasImages) {
+    for (let i = 0; i < images!.length; i++) {
+      const img = images![i];
+
+      // Validate required fields
+      if (!img.data || typeof img.data !== "string") {
+        const errMsg = `images[${i}].data is required and must be a base64 string (got ${typeof img.data})`;
+        console.error(`[images] Image ${i}: ${errMsg}`);
+        logReq("validation_error", { errorMessage: errMsg });
+        res.status(400).json({ error: errMsg });
+        return;
+      }
+
+      // Strip data-URI prefix if present (e.g. "data:image/png;base64,...")
+      const uriMatch = img.data.match(/^data:(image\/[a-z+]+);base64,(.+)$/s);
+      if (uriMatch) {
+        console.log(`[images] Image ${i}: stripped data-URI prefix (detected: ${uriMatch[1]})`);
+        if (!img.media_type) img.media_type = uriMatch[1] as any;
+        img.data = uriMatch[2];
+      }
+
+      // Validate media_type
+      const validTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+      if (!img.media_type || !validTypes.includes(img.media_type)) {
+        const errMsg = `images[${i}].media_type must be one of: ${validTypes.join(", ")} (got "${img.media_type}")`;
+        console.error(`[images] Image ${i}: ${errMsg}`);
+        logReq("validation_error", { errorMessage: errMsg });
+        res.status(400).json({ error: errMsg });
+        return;
+      }
+
+      // Validate base64 (quick check: no whitespace/non-base64 chars beyond padding)
+      const base64Clean = img.data.replace(/\s/g, "");
+      if (base64Clean !== img.data) {
+        console.log(`[images] Image ${i}: stripped whitespace from base64 data`);
+        img.data = base64Clean;
+      }
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(img.data)) {
+        const errMsg = `images[${i}].data is not valid base64 (length=${img.data.length}, prefix=${img.data.substring(0, 40)})`;
+        console.error(`[images] Image ${i}: ${errMsg}`);
+        logReq("validation_error", { errorMessage: errMsg });
+        res.status(400).json({ error: `images[${i}].data is not valid base64` });
+        return;
+      }
+
+      // Check decoded size (~3/4 of base64 length)
+      const estimatedBytes = Math.ceil(img.data.length * 3 / 4);
+      const estimatedMB = (estimatedBytes / (1024 * 1024)).toFixed(2);
+      console.log(`[images] Image ${i}: media_type=${img.media_type}, base64_length=${img.data.length}, ~${estimatedMB}MB`);
+
+      imageMeta.push({ index: i, media_type: img.media_type, base64_length: img.data.length, estimated_mb: estimatedMB });
+
+      if (estimatedBytes > 20 * 1024 * 1024) {
+        const errMsg = `images[${i}] is too large (~${estimatedMB}MB, max 20MB)`;
+        console.error(`[images] Image ${i}: ${errMsg}`);
+        logReq("validation_error", { errorMessage: errMsg });
+        res.status(400).json({ error: errMsg });
+        return;
+      }
+    }
+
+    // Save images to workspace
     const ws = path.basename(agent.getWorkingDir());
     const imgDir = path.join(agent.getWorkingDir(), ".session-images");
     if (!existsSync(imgDir)) { mkdirSync(imgDir, { recursive: true }); }
-    for (let i = 0; i < images.length; i++) {
-      const ext = images[i].media_type.split("/")[1] || "png";
+    for (let i = 0; i < images!.length; i++) {
+      const ext = images![i].media_type.split("/")[1] || "png";
       const filename = `img-${Date.now()}-${i}.${ext}`;
       const imgPath = path.join(imgDir, filename);
-      require("fs").writeFileSync(imgPath, Buffer.from(images[i].data, "base64"));
+      require("fs").writeFileSync(imgPath, Buffer.from(images![i].data, "base64"));
       imageUrls.push(`/images/${ws}/${filename}`);
     }
   }
@@ -219,6 +302,14 @@ app.post("/chat", async (req: Request, res: Response<ChatResponse | ErrorRespons
       ...(imageUrls.length > 0 ? { imageUrls } : {}),
     });
 
+    // Log to request_logs (includes image metadata for debugging)
+    logReq(result.isError ? "error" : "ok", {
+      sessionId: result.sessionId,
+      durationMs: result.durationMs,
+      costUsd: result.costUsd,
+      errorMessage: result.isError ? result.result.substring(0, 500) : undefined,
+    });
+
     // Persist to database (fire-and-forget)
     const msgPreview = message.length > 200 ? message.slice(0, 200) + "…" : message;
     const resPreview = result.result.length > 200 ? result.result.slice(0, 200) + "…" : result.result;
@@ -239,6 +330,8 @@ app.post("/chat", async (req: Request, res: Response<ChatResponse | ErrorRespons
       });
     }
   } catch (err: any) {
+    console.error(`[chat] Error${hasImages ? ` (with ${images!.length} image(s))` : ""}: ${err.message ?? err}`);
+    logReq("error", { errorMessage: (err.message ?? String(err)).substring(0, 500) });
     res.status(500).json({ error: err.message ?? "Unknown error" });
   }
 });

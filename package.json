@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "build": "tsc",
+    "build": "tsc && cp src/system-prompt.md dist/",
     "start": "node dist/server.js",
     "test": "jest",
     "test:unit": "jest tests/unit",
