@@ -16,7 +16,7 @@ const ALIAS_MAP: Record<string, string> = {
 };
 
 /** Resolve alias to full model ID, or pass through as-is */
-function resolveModel(model: string): string {
+export function resolveModel(model: string): string {
   return ALIAS_MAP[model] ?? model;
 }
 
@@ -34,7 +34,7 @@ const ALLOWED_TOOL_PATTERNS = [
   "mcp__context7__query-docs",
 ];
 
-function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
+export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
   const logDir = path.join(dir, ".session-log");
   const lines = [
     `You are working inside the directory: ${dir}`,
@@ -90,7 +90,7 @@ function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
  * truncate everything after the closing ``` so the client gets only
  * the tool invocation (no hallucinated results).
  */
-function truncateAfterToolCall(text: string, toolNames: string[]): { text: string; toolCall: string | null } {
+export function truncateAfterToolCall(text: string, toolNames: string[]): { text: string; toolCall: string | null } {
   if (toolNames.length === 0) return { text, toolCall: null };
 
   // Build pattern: ```tool:<name> ... ```

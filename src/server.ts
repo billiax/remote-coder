@@ -84,7 +84,7 @@ if (!existsSync(BASE_DIR)) {
   mkdirSync(BASE_DIR, { recursive: true });
 }
 
-function resolveWorkspace(workspace: string): string {
+export function resolveWorkspace(workspace: string): string {
   const sanitized = path.basename(workspace);
   if (sanitized !== workspace || workspace.includes("..")) {
     throw new Error(`Invalid workspace name: ${workspace}`);
@@ -92,7 +92,7 @@ function resolveWorkspace(workspace: string): string {
   return path.join(BASE_DIR, sanitized);
 }
 
-function isWorkspaceAllowed(workspace: string): boolean {
+export function isWorkspaceAllowed(workspace: string): boolean {
   if (ALLOWED_WORKSPACES.length === 0) return true;
   return ALLOWED_WORKSPACES.includes(workspace);
 }
