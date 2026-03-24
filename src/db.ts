@@ -135,7 +135,7 @@ export async function listSessionsDb(): Promise<
     `SELECT session_id, workspace, model, engine, created_at, last_active, total_cost, total_turns
      FROM sessions ORDER BY last_active DESC`,
   );
-  return res.rows.map((r) => ({
+  return res.rows.map((r: any) => ({
     sessionId: r.session_id,
     workspace: r.workspace,
     model: r.model,
