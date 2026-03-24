@@ -1,3 +1,9 @@
+/** A single parsed request from a ```response``` block */
+export interface ParsedRequest {
+  name: string;
+  params?: Record<string, any>;
+}
+
 export interface AgentResponse {
   sessionId: string;
   result: string;
@@ -8,6 +14,8 @@ export interface AgentResponse {
   inputTokens?: number;
   /** Context window size for the model */
   contextWindow?: number;
+  /** Parsed requests from ```response``` block, or null if message/no block */
+  requests?: ParsedRequest[] | null;
 }
 
 export interface HistoryMessage {

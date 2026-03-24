@@ -2,7 +2,7 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import { existsSync, mkdirSync } from "fs";
-import { CodingAgent, EngineType } from "./types";
+import { CodingAgent, EngineType, ParsedRequest } from "./types";
 import { createAgent } from "./agent-factory";
 import { usesSdk } from "./claude-session";
 import { initDb, upsertSession, recordActivity, deleteSessionDb, listSessionsDb, logRequest } from "./db";
@@ -15,7 +15,7 @@ const app = express();
 app.use((_req: Request, res: Response, next: NextFunction) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Content-Type, X-API-Key");
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   if (_req.method === "OPTIONS") { res.sendStatus(200); return; }
   next();
 });
@@ -68,7 +68,7 @@ app.get("/images/:workspace/:filename", (req: Request, res: Response) => {
 app.use(requireApiKey);
 
 // Base directory where session working dirs live
-const BASE_DIR = path.resolve(process.env.BASE_DIR ?? path.join(process.cwd(), "workspaces"));
+const BASE_DIR = path.resolve(process.env.BASE_DIR ?? path.join(require("os").homedir(), ".workspaces"));
 
 // Path to MCP config JSON (for Context7 etc.)
 const MCP_CONFIG = process.env.MCP_CONFIG ? path.resolve(process.env.MCP_CONFIG) : undefined;
@@ -121,6 +121,8 @@ interface ChatResponse {
   workspace: string;
   model: string;
   engine: string;
+  /** Parsed requests from Claude's response, or null if it's a plain message */
+  requests?: ParsedRequest[] | null;
 }
 
 interface ErrorResponse {
@@ -293,6 +295,7 @@ app.post("/chat", async (req: Request, res: Response<ChatResponse | ErrorRespons
     res.json({
       sessionId: result.sessionId,
       response: result.result,
+      requests: result.requests ?? null,
       isError: result.isError,
       durationMs: result.durationMs,
       costUsd: result.costUsd,
@@ -417,13 +420,36 @@ app.get("/sessions/:id/history", (req: Request, res: Response) => {
   });
 });
 
-app.get("/sessions", (_req: Request, res: Response) => {
-  const list = Array.from(sessions.entries()).map(([id, s]) => ({
-    sessionId: id,
-    workspace: path.basename(s.getWorkingDir()),
-    model: s.getModel(),
-  }));
-  res.json({ sessions: list });
+app.get("/sessions", async (_req: Request, res: Response) => {
+  // Try to get ordering from DB (sorted by last_active DESC)
+  const dbSessions = await listSessionsDb();
+
+  if (dbSessions.length > 0) {
+    // Use DB order — only include sessions that are still in memory
+    const inMemory = new Set(sessions.keys());
+    const ordered = dbSessions.filter(s => inMemory.has(s.sessionId));
+    // Add any in-memory sessions not yet in DB (newly created) at the front
+    const dbIds = new Set(ordered.map(s => s.sessionId));
+    const list: { sessionId: string; workspace: string; model: string }[] = [];
+    for (const [id, s] of sessions) {
+      if (!dbIds.has(id)) {
+        list.push({ sessionId: id, workspace: path.basename(s.getWorkingDir()), model: s.getModel() });
+      }
+    }
+    for (const s of ordered) {
+      const agent = sessions.get(s.sessionId)!;
+      list.push({ sessionId: s.sessionId, workspace: path.basename(agent.getWorkingDir()), model: agent.getModel() });
+    }
+    res.json({ sessions: list });
+  } else {
+    // No DB — return in reverse insertion order (latest first)
+    const list = Array.from(sessions.entries()).map(([id, s]) => ({
+      sessionId: id,
+      workspace: path.basename(s.getWorkingDir()),
+      model: s.getModel(),
+    })).reverse();
+    res.json({ sessions: list });
+  }
 });
 
 app.delete("/sessions/:id", (req: Request, res: Response) => {
@@ -437,13 +463,23 @@ const PORT = parseInt(process.env.PORT ?? "3333", 10);
 
 async function start() {
   await initDb();
-  app.listen(PORT, () => {
-    console.log(`Remote coder running on port ${PORT}`);
-    console.log(`Default engine: ${DEFAULT_ENGINE}`);
-    console.log(`Workspaces: ${BASE_DIR}`);
-    if (DEFAULT_ENGINE === "claude") {
-      console.log(`Claude mode: ${usesSdk() ? "SDK (ANTHROPIC_API_KEY)" : "CLI (CLAUDE_CODE_OAUTH_TOKEN)"}`);
-    }
+  return new Promise<void>((resolve, reject) => {
+    const server = app.listen(PORT, () => {
+      console.log(`Remote coder running on port ${PORT}`);
+      console.log(`Default engine: ${DEFAULT_ENGINE}`);
+      console.log(`Workspaces: ${BASE_DIR}`);
+      if (DEFAULT_ENGINE === "claude") {
+        console.log(`Claude mode: ${usesSdk() ? "SDK (ANTHROPIC_API_KEY)" : "CLI (CLAUDE_CODE_OAUTH_TOKEN)"}`);
+      }
+      resolve();
+    });
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        reject(new Error(`Port ${PORT} is already in use`));
+      } else {
+        reject(err);
+      }
+    });
   });
 }
 

@@ -1143,9 +1143,11 @@ async function fetchSessions() {
     const res = await authFetch(`${API}/sessions`);
     if (res.status === 401) { showKeyModal(); return; }
     const data = await res.json();
-    for (const s of data.sessions) {
+    // Server returns sessions sorted by last_active DESC; assign decreasing order values to preserve that
+    for (let i = 0; i < data.sessions.length; i++) {
+      const s = data.sessions[i];
       if (!sessions[s.sessionId]) {
-        sessions[s.sessionId] = { workspace: s.workspace, model: s.model || 'sonnet', messages: [] };
+        sessions[s.sessionId] = { workspace: s.workspace, model: s.model || 'sonnet', messages: [], lastActive: data.sessions.length - i };
       }
     }
     renderSessionList();
@@ -1156,7 +1158,7 @@ async function fetchSessions() {
 
 function renderSessionList() {
   const el = document.getElementById('sessionList');
-  const ids = Object.keys(sessions);
+  const ids = Object.keys(sessions).sort((a, b) => (sessions[b].lastActive || 0) - (sessions[a].lastActive || 0));
   if (ids.length === 0) {
     el.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;font-family:var(--font-mono);text-align:center;">no sessions yet</div>';
     return;
@@ -1303,6 +1305,8 @@ async function sendMessage() {
 
   sending = true;
   document.getElementById('sendBtn').disabled = true;
+  session.lastActive = Date.now();
+  renderSessionList();
 
   try {
     const res = await authFetch(`${API}/chat`, {
@@ -1396,7 +1400,7 @@ function createSession() {
 
   // Use a temp ID until first message gives us the real one
   const tempId = 'pending-' + Date.now();
-  sessions[tempId] = { workspace: name, model, engine, messages: [] };
+  sessions[tempId] = { workspace: name, model, engine, messages: [], lastActive: Date.now() };
   switchSession(tempId);
 }
 
@@ -1680,6 +1684,7 @@ fetchSessions().then(async () => {
             workspace: data.workspace || 'unknown',
             model: data.model || 'sonnet',
             messages: [],
+            lastActive: 0,
           };
           renderSessionList();
         }

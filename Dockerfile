@@ -19,7 +19,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 
 # Build TypeScript and copy static assets
-RUN npx tsc && cp -r src/public dist/public && cp src/system-prompt.md dist/
+RUN npx tsc && cp -r src/public dist/public && cp src/system-prompt.md src/tools-prompt.md dist/
 
 # OpenCode config — copy your config/opencode.json or fall back to example
 RUN mkdir -p /root/.config/opencode

@@ -58,7 +58,24 @@ export const swaggerSpec = {
         type: "object",
         properties: {
           sessionId: { type: "string" },
-          response: { type: "string" },
+          response: { type: "string", description: "Claude's text response (message content or explanation text)" },
+          requests: {
+            nullable: true,
+            description: "Parsed requests from Claude's response. null when Claude sends a plain message. When non-null, the client should execute each request and send the results back in the next message as [REQUEST RESULT: <name>] blocks.",
+            type: "array",
+            items: {
+              type: "object",
+              required: ["name"],
+              properties: {
+                name: { type: "string", description: "Name of the requested information source (matches a tool name)" },
+                params: {
+                  type: "object",
+                  additionalProperties: true,
+                  description: "Parameters for the request (if any)",
+                },
+              },
+            },
+          },
           isError: { type: "boolean" },
           durationMs: { type: "number" },
           costUsd: { type: "number" },
@@ -110,7 +127,7 @@ export const swaggerSpec = {
       post: {
         summary: "Send a message",
         description:
-          "Start a new session or continue an existing one. Supports images and ephemeral tools.",
+          "Start a new session or continue an existing one. Supports images and tools.\n\n**Tool flow:** When you provide `tools`, Claude may respond with `requests` (non-null array) instead of a plain message. Each request has a `name` and optional `params`. Execute the requested actions on your side, then send the results back by calling `/chat` again with the same `sessionId` and a message formatted as `[REQUEST RESULT: <name>]\\n<result data>` for each request. Claude will then continue working with the results.\n\n**Example flow:**\n1. POST /chat with tools → response has `requests: [{name: 'page_snapshot'}]`\n2. Client takes a page snapshot\n3. POST /chat with message `[REQUEST RESULT: page_snapshot]\\n<html>...</html>` → response has `requests: [{name: 'click', params: {selector: '#btn'}}]`\n4. Client clicks the button\n5. POST /chat with message `[REQUEST RESULT: click]\\nClicked successfully` → response has `requests: null` (plain message)",
         tags: ["Chat"],
         requestBody: {
           required: true,

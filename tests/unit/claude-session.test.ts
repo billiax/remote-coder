@@ -1,4 +1,4 @@
-import { resolveModel, buildSystemPrompt, truncateAfterToolCall } from "../../src/claude-session";
+import { resolveModel, buildSystemPrompt, truncateAfterToolCall, validateResponseBlock, parseResponseBlock } from "../../src/claude-session";
 import { SessionTool } from "../../src/types";
 
 describe("resolveModel", () => {
@@ -40,12 +40,12 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("absolute");
   });
 
-  it("includes tool definitions when tools provided", () => {
+  it("includes request definitions when tools provided", () => {
     const tools: SessionTool[] = [
       { name: "search_web", description: "Search the web for information" },
     ];
     const prompt = buildSystemPrompt("/workspace/test", tools);
-    expect(prompt).toContain("SESSION TOOLS");
+    expect(prompt).toContain("RESPONSE PROTOCOL");
     expect(prompt).toContain("search_web");
     expect(prompt).toContain("Search the web for information");
   });
@@ -67,86 +67,170 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("units");
   });
 
-  it("includes tool call format instructions", () => {
+  it("includes response format instructions with requests type", () => {
     const tools: SessionTool[] = [
       { name: "my_tool", description: "A tool" },
     ];
     const prompt = buildSystemPrompt("/workspace/test", tools);
-    expect(prompt).toContain("```tool:");
-    expect(prompt).toContain("STOP immediately");
+    expect(prompt).toContain("RESPONSE PROTOCOL");
+    expect(prompt).toContain('"type"');
+    expect(prompt).toContain('"requests"');
+    expect(prompt).toContain('"message"');
   });
 
-  it("does not include tool section when no tools", () => {
+  it("does not include response protocol when no tools", () => {
     const prompt = buildSystemPrompt("/workspace/test");
-    expect(prompt).not.toContain("SESSION TOOLS");
+    expect(prompt).not.toContain("RESPONSE PROTOCOL");
   });
 
-  it("does not include tool section when empty tools array", () => {
+  it("does not include response protocol when empty tools array", () => {
     const prompt = buildSystemPrompt("/workspace/test", []);
-    expect(prompt).not.toContain("SESSION TOOLS");
+    expect(prompt).not.toContain("RESPONSE PROTOCOL");
   });
 });
 
-describe("truncateAfterToolCall", () => {
+describe("parseResponseBlock", () => {
   it("returns text unchanged when no tool names provided", () => {
-    const text = "Hello world";
-    const result = truncateAfterToolCall(text, []);
+    const result = parseResponseBlock("Hello world", []);
     expect(result.text).toBe("Hello world");
-    expect(result.toolCall).toBeNull();
+    expect(result.requests).toBeNull();
   });
 
-  it("returns text unchanged when no tool call present", () => {
-    const text = "Here is some regular text without any tool calls.";
-    const result = truncateAfterToolCall(text, ["search_web"]);
+  it("returns text unchanged when no response block present", () => {
+    const text = "Just regular text.";
+    const result = parseResponseBlock(text, ["search_web"]);
     expect(result.text).toBe(text);
+    expect(result.requests).toBeNull();
+  });
+
+  it("parses single request (requests type)", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "page_snapshot"}]}\n```';
+    const result = parseResponseBlock(text, ["page_snapshot"]);
+    expect(result.requests).toEqual([{ name: "page_snapshot" }]);
+    expect(result.text).toBe("");
+  });
+
+  it("parses single request with params", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "click", "params": {"selector": "#btn"}}]}\n```';
+    const result = parseResponseBlock(text, ["click"]);
+    expect(result.requests).toEqual([{ name: "click", params: { selector: "#btn" } }]);
+  });
+
+  it("parses multiple requests", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "page_snapshot"}, {"name": "console_logs"}]}\n```';
+    const result = parseResponseBlock(text, ["page_snapshot", "console_logs"]);
+    expect(result.requests).toHaveLength(2);
+    expect(result.requests![0].name).toBe("page_snapshot");
+    expect(result.requests![1].name).toBe("console_logs");
+  });
+
+  it("extracts content field from requests", () => {
+    const text = '```response\n{"type": "requests", "content": "Let me check.", "requests": [{"name": "page_snapshot"}]}\n```';
+    const result = parseResponseBlock(text, ["page_snapshot"]);
+    expect(result.requests).toEqual([{ name: "page_snapshot" }]);
+    expect(result.text).toBe("");
+  });
+
+  it("parses message type and extracts content", () => {
+    const text = '```response\n{"type": "message", "content": "The answer is 42"}\n```';
+    const result = parseResponseBlock(text, ["search_web"]);
+    expect(result.text).toBe("The answer is 42");
+    expect(result.requests).toBeNull();
+  });
+
+  it("returns text before block for requests", () => {
+    const text = 'Some explanation.\n```response\n{"type": "requests", "requests": [{"name": "search"}]}\n```';
+    const result = parseResponseBlock(text, ["search"]);
+    expect(result.text).toBe("Some explanation.");
+    expect(result.requests).toEqual([{ name: "search" }]);
+  });
+
+  it("strips text after block", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "search"}]}\n```\nHallucinated result.';
+    const result = parseResponseBlock(text, ["search"]);
+    expect(result.text).not.toContain("Hallucinated");
+  });
+
+  it("handles backward-compat single request type", () => {
+    const text = '```response\n{"type": "request", "name": "page_snapshot"}\n```';
+    const result = parseResponseBlock(text, ["page_snapshot"]);
+    expect(result.requests).toEqual([{ name: "page_snapshot" }]);
+  });
+
+  it("handles malformed JSON gracefully", () => {
+    const text = '```response\n{not valid}\n```\nAfter.';
+    const result = parseResponseBlock(text, ["my_tool"]);
+    expect(result.requests).toBeNull();
+    expect(result.text).not.toContain("After.");
+  });
+
+  it("handles nested code fences inside JSON content", () => {
+    // Agent embeds a code block inside the message content — the inner ```
+    // should not break parsing
+    const json = '{"type": "message", "content": "Here is the code:\\n\\n```javascript\\nconst x = 1;\\n```\\n\\nDone."}';
+    const text = '```response\n' + json + '\n```';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.requests).toBeNull();
+    expect(result.text).toContain("Here is the code:");
+    expect(result.text).toContain("Done.");
+  });
+
+  it("handles nested code fences with triple backticks in JSON strings", () => {
+    const json = '{"type": "requests", "requests": [{"name": "screenshot"}]}';
+    // Extra ``` after the block should be ignored
+    const text = 'Some explanation\n```response\n' + json + '\n```\nHallucinated results here';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.requests).toEqual([{ name: "screenshot" }]);
+    expect(result.text).toBe("Some explanation");
+  });
+
+  // --- Raw JSON format (no fences) ---
+
+  it("parses raw JSON message response", () => {
+    const text = '{"type": "message", "content": "Hello world"}';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.requests).toBeNull();
+    expect(result.text).toBe("Hello world");
+  });
+
+  it("parses raw JSON requests response", () => {
+    const text = '{"type": "requests", "requests": [{"name": "screenshot"}]}';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.requests).toEqual([{ name: "screenshot" }]);
+  });
+
+  it("parses raw JSON with code blocks in content", () => {
+    const text = '{"type": "message", "content": "Code:\\n\\n```js\\nconst x = 1;\\n```\\n\\nDone."}';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.text).toContain("Code:");
+    expect(result.text).toContain("Done.");
+  });
+
+  it("parses raw JSON with preamble text before it", () => {
+    const text = 'Let me check that.\n{"type": "requests", "requests": [{"name": "screenshot"}]}';
+    const result = parseResponseBlock(text, ["screenshot"]);
+    expect(result.requests).toEqual([{ name: "screenshot" }]);
+    expect(result.text).toBe("Let me check that.");
+  });
+});
+
+describe("truncateAfterToolCall (backward compat)", () => {
+  it("returns text unchanged when no tool names", () => {
+    const result = truncateAfterToolCall("Hello", []);
+    expect(result.text).toBe("Hello");
     expect(result.toolCall).toBeNull();
   });
 
-  it("truncates text after a tool call block", () => {
-    const text = `Let me search for that.
-\`\`\`tool:search_web
-query: "typescript testing"
-\`\`\`
-Here are the results I found...
-This should be truncated.`;
-    const result = truncateAfterToolCall(text, ["search_web"]);
-    expect(result.text).toContain("search_web");
-    expect(result.text).not.toContain("Here are the results");
-    expect(result.text).not.toContain("truncated");
-    expect(result.toolCall).toBe("search_web");
+  it("returns first request name as toolCall", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "page_snapshot"}]}\n```';
+    const result = truncateAfterToolCall(text, ["page_snapshot"]);
+    expect(result.toolCall).toBe("page_snapshot");
   });
 
-  it("handles multiple tool names", () => {
-    const text = `I'll use the weather tool.
-\`\`\`tool:get_weather
-city: London
-\`\`\`
-The weather is sunny.`;
-    const result = truncateAfterToolCall(text, ["search_web", "get_weather"]);
-    expect(result.text).toContain("get_weather");
-    expect(result.text).not.toContain("sunny");
-    expect(result.toolCall).toBe("get_weather");
-  });
-
-  it("preserves text before the tool call", () => {
-    const text = `Let me help you with that. I'll search now.
-\`\`\`tool:search_web
-query: test
-\`\`\`
-Results here.`;
-    const result = truncateAfterToolCall(text, ["search_web"]);
-    expect(result.text).toContain("Let me help you with that");
-    expect(result.toolCall).toBe("search_web");
-  });
-
-  it("handles tool names with special regex characters", () => {
-    const text = `Using tool.
-\`\`\`tool:my.tool
-data
-\`\`\`
-After.`;
-    const result = truncateAfterToolCall(text, ["my.tool"]);
-    expect(result.toolCall).toBe("my.tool");
+  it("returns null toolCall for message type", () => {
+    const text = '```response\n{"type": "message", "content": "Done"}\n```';
+    const result = truncateAfterToolCall(text, ["search"]);
+    expect(result.toolCall).toBeNull();
   });
 });
 
@@ -161,7 +245,7 @@ describe("buildSystemPrompt with ephemeral + persistent tools merged", () => {
     expect(prompt).toContain("A persistent tool");
     expect(prompt).toContain("ephemeral_tool");
     expect(prompt).toContain("An ephemeral tool");
-    expect(prompt).toContain("SESSION TOOLS");
+    expect(prompt).toContain("RESPONSE PROTOCOL");
   });
 
   it("includes invocation instructions for merged tools", () => {
@@ -170,8 +254,7 @@ describe("buildSystemPrompt with ephemeral + persistent tools merged", () => {
       { name: "tool_b", description: "Second tool" },
     ];
     const prompt = buildSystemPrompt("/workspace/test", tools);
-    expect(prompt).toContain("```tool:");
-    expect(prompt).toContain("STOP immediately");
+    expect(prompt).toContain('"type"');
     expect(prompt).toContain("tool_a");
     expect(prompt).toContain("tool_b");
   });
@@ -197,28 +280,69 @@ describe("buildSystemPrompt with ephemeral + persistent tools merged", () => {
   });
 });
 
-describe("truncateAfterToolCall with merged tool names", () => {
-  it("truncates for ephemeral tool names in combined list", () => {
-    const text = `Calling ephemeral tool.
-\`\`\`tool:ephemeral_search
-query: test
-\`\`\`
-Hallucinated results here.`;
-    const allToolNames = ["persistent_tool", "ephemeral_search"];
-    const result = truncateAfterToolCall(text, allToolNames);
-    expect(result.toolCall).toBe("ephemeral_search");
-    expect(result.text).not.toContain("Hallucinated results");
+describe("validateResponseBlock", () => {
+  it("returns null when no response block present", () => {
+    expect(validateResponseBlock("Just some text")).toBeNull();
   });
 
-  it("truncates for persistent tool names in combined list", () => {
-    const text = `Using persistent tool.
-\`\`\`tool:persistent_tool
-data: value
-\`\`\`
-Should be removed.`;
-    const allToolNames = ["persistent_tool", "ephemeral_tool"];
-    const result = truncateAfterToolCall(text, allToolNames);
-    expect(result.toolCall).toBe("persistent_tool");
-    expect(result.text).not.toContain("Should be removed");
+  it("returns null for valid message block", () => {
+    const text = '```response\n{"type": "message", "content": "Hello"}\n```';
+    expect(validateResponseBlock(text)).toBeNull();
+  });
+
+  it("returns null for valid requests block", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "page_snapshot"}]}\n```';
+    expect(validateResponseBlock(text)).toBeNull();
+  });
+
+  it("returns null for valid requests block with params", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "click", "params": {"selector": "#btn"}}]}\n```';
+    expect(validateResponseBlock(text)).toBeNull();
+  });
+
+  it("returns null for valid multiple requests", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"name": "page_snapshot"}, {"name": "console_logs"}]}\n```';
+    expect(validateResponseBlock(text)).toBeNull();
+  });
+
+  it("returns null for backward-compat single request type", () => {
+    const text = '```response\n{"type": "request", "name": "foo"}\n```';
+    expect(validateResponseBlock(text)).toBeNull();
+  });
+
+  it("returns error for invalid JSON", () => {
+    const text = '```response\n{not valid}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain("Invalid JSON");
+  });
+
+  it("returns error for missing type field", () => {
+    const text = '```response\n{"name": "foo"}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain('Missing "type"');
+  });
+
+  it("returns error for message without content", () => {
+    const text = '```response\n{"type": "message"}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain('"content" string');
+  });
+
+  it("returns error for requests without array", () => {
+    const text = '```response\n{"type": "requests", "requests": "not-array"}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain('"requests" array');
+  });
+
+  it("returns error for request item without name", () => {
+    const text = '```response\n{"type": "requests", "requests": [{"params": {}}]}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain('"name" string');
+  });
+
+  it("returns error for unknown type", () => {
+    const text = '```response\n{"type": "unknown"}\n```';
+    const err = validateResponseBlock(text);
+    expect(err).toContain('Unknown type');
   });
 });

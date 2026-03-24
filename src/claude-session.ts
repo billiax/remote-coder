@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "fs";
 import path from "path";
-import { CodingAgent, AgentResponse, AgentOptions, HistoryMessage, SessionTool, ImageInput } from "./types";
+import { CodingAgent, AgentResponse, AgentOptions, HistoryMessage, SessionTool, ImageInput, ParsedRequest } from "./types";
 
 export interface ClaudeSessionOptions extends AgentOptions {
   mcpConfig?: string;
@@ -39,48 +39,52 @@ const SYSTEM_PROMPT_TEMPLATE = readFileSync(
   "utf-8"
 );
 
+const TOOLS_PROMPT_TEMPLATE = readFileSync(
+  path.join(__dirname, "tools-prompt.md"),
+  "utf-8"
+);
+
 export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
   const logDir = path.join(dir, ".session-log");
 
   let toolsSection = "";
   if (tools && tools.length > 0) {
-    const lines: string[] = [];
-    lines.push(`CRITICAL — SESSION TOOLS:`);
-    lines.push(`You have access to the tools listed below. Do NOT attempt to use MCP tools, Playwright tools, or any built-in browser tools — they will be blocked. Instead, use ONLY the session tools defined here.`);
-    lines.push(`These session tools work by TEXT OUTPUT: you write a fenced code block in your response and the remote system executes it. No permissions, no MCP, no function calls — just text.`);
-    lines.push(`The remote system reads your text output, detects the tool call block, executes the tool, and sends the result back in the next message as [TOOL RESULT: <tool_name>].`);
-    lines.push(`You must NEVER fabricate, guess, or hallucinate tool results. ALWAYS wait for the actual result.`);
-    lines.push(`After receiving a tool result, you may then respond to the user or call another tool.`);
-    lines.push(``);
-    lines.push(`Available tools:`);
-    for (const tool of tools) {
-      lines.push(`- **${tool.name}**: ${tool.description}`);
+    // Build request list (tools reframed as information sources)
+    const requestList = tools.map(tool => {
+      let entry = `- **${tool.name}**: ${tool.description}`;
       if (tool.parameters) {
         const params = Object.entries(tool.parameters)
           .map(([k, v]) => `    - ${k} (${v.type}${v.required ? ', required' : ''}): ${v.description ?? ''}`)
           .join('\n');
-        lines.push(params);
+        entry += '\n  Parameters:\n' + params;
       }
+      return entry;
+    }).join('\n');
+
+    // Build dynamic examples from actual tools
+    const examples: string[] = [];
+    const noParamTool = tools.find(t => !t.parameters || Object.keys(t.parameters).length === 0);
+    const paramTool = tools.find(t => t.parameters && Object.keys(t.parameters).length > 0);
+
+    if (noParamTool) {
+      examples.push(`To request ${noParamTool.name}:`);
+      examples.push(JSON.stringify({ type: 'requests', requests: [{ name: noParamTool.name }] }));
+      examples.push('');
     }
-    lines.push(``);
-    lines.push(`To call a tool, output EXACTLY this format in your response and nothing else after it:`);
-    lines.push('```tool:<tool_name>');
-    lines.push('<optional arguments or content>');
-    lines.push('```');
-    lines.push(``);
-    lines.push(`Example — to take a browser snapshot, just write this in your reply:`);
-    lines.push('```tool:page_snapshot');
-    lines.push('```');
-    lines.push(`Then STOP and wait. The system will execute it and send the result back.`);
-    lines.push(``);
-    lines.push(`Rules:`);
-    lines.push(`1. After outputting a tool call block, STOP immediately. Do not write any text after it.`);
-    lines.push(`2. Wait for [TOOL RESULT: <tool_name>] in the next user message before continuing.`);
-    lines.push(`3. You may include brief text BEFORE a tool call to explain what you're doing.`);
-    lines.push(`4. Never invent tool output. If you don't have a result, you haven't called the tool yet.`);
-    lines.push(`5. These are your tools to use freely — no permissions or MCP registration needed.`);
-    lines.push(`6. These tool definitions survive compaction.`);
-    toolsSection = lines.join("\n");
+    if (paramTool && paramTool.parameters) {
+      const exampleParams: Record<string, string> = {};
+      for (const [k] of Object.entries(paramTool.parameters)) exampleParams[k] = `<${k}>`;
+      examples.push(`To request ${paramTool.name} with parameters:`);
+      examples.push(JSON.stringify({ type: 'requests', requests: [{ name: paramTool.name, params: exampleParams }] }));
+      examples.push('');
+    }
+
+    examples.push('To send a plain message:');
+    examples.push(JSON.stringify({ type: 'message', content: 'Your reply here' }));
+
+    toolsSection = TOOLS_PROMPT_TEMPLATE
+      .replace(/\{\{REQUEST_LIST\}\}/g, requestList)
+      .replace(/\{\{REQUEST_EXAMPLES\}\}/g, examples.join('\n'));
   }
 
   return SYSTEM_PROMPT_TEMPLATE
@@ -90,24 +94,157 @@ export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
     .trimEnd();
 }
 
+/** Result of parsing assistant response for ```response``` blocks */
+export interface ParsedResponse {
+  /** The response text (everything before the ```response``` block, or message content) */
+  text: string;
+  /** Parsed requests, or null if it's a message / no block found */
+  requests: ParsedRequest[] | null;
+}
+
 /**
- * Post-process assistant response: if it contains a tool call block,
- * truncate everything after the closing ``` so the client gets only
- * the tool invocation (no hallucinated results).
+ * Extract a balanced JSON object from text starting at the given position.
+ * Tracks brace depth and respects string escaping so nested ``` fences
+ * inside JSON strings don't break parsing.
  */
+function extractBalancedJson(text: string, start: number): string | null {
+  // Find the first '{' from start
+  let i = start;
+  while (i < text.length && text[i] !== '{') i++;
+  if (i >= text.length) return null;
+
+  const jsonBegin = i;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return text.slice(jsonBegin, i + 1); }
+  }
+  return null; // Unbalanced
+}
+
+/**
+ * Post-process assistant response: extract JSON (raw or inside ```response``` fences)
+ * using balanced-brace matching, then parse into structured response.
+ */
+export function parseResponseBlock(text: string, toolNames: string[]): ParsedResponse {
+  if (toolNames.length === 0) return { text, requests: null };
+
+  // Determine where to start looking for JSON:
+  // 1. If there's a ```response fence, start after it (backward compat)
+  // 2. Otherwise, find the first { in the raw text (new format: raw JSON)
+  let jsonSearchStart = 0;
+  let textBefore = '';
+
+  const fenceRe = /```response\s*\n/m;
+  const fenceMatch = text.match(fenceRe);
+  if (fenceMatch) {
+    const blockStart = text.indexOf(fenceMatch[0]);
+    textBefore = text.slice(0, blockStart).trimEnd();
+    jsonSearchStart = blockStart + fenceMatch[0].length;
+  }
+
+  const jsonContent = extractBalancedJson(text, jsonSearchStart);
+  if (!jsonContent) return { text, requests: null };
+
+  // If no fence was found, textBefore is everything before the JSON
+  if (!fenceMatch) {
+    const jsonIdx = text.indexOf(jsonContent);
+    textBefore = text.slice(0, jsonIdx).trimEnd();
+  }
+
+  try {
+    const parsed = JSON.parse(jsonContent);
+
+    if (parsed.type === 'requests' && Array.isArray(parsed.requests)) {
+      const requests: ParsedRequest[] = parsed.requests
+        .filter((r: any) => r && typeof r.name === 'string')
+        .map((r: any) => ({ name: r.name, ...(r.params ? { params: r.params } : {}) }));
+      return { text: textBefore, requests: requests.length > 0 ? requests : null };
+    }
+
+    // Support single request format for backwards compat
+    if (parsed.type === 'request' && typeof parsed.name === 'string') {
+      const req: ParsedRequest = { name: parsed.name, ...(parsed.params ? { params: parsed.params } : {}) };
+      return { text: textBefore, requests: [req] };
+    }
+
+    if (parsed.type === 'message' && typeof parsed.content === 'string') {
+      return { text: parsed.content, requests: null };
+    }
+  } catch {
+    // Malformed JSON — return text before the block
+  }
+
+  return { text: textBefore, requests: null };
+}
+
+// Backward-compat wrapper used by send()
 export function truncateAfterToolCall(text: string, toolNames: string[]): { text: string; toolCall: string | null } {
-  if (toolNames.length === 0) return { text, toolCall: null };
+  const parsed = parseResponseBlock(text, toolNames);
+  return {
+    text: parsed.text,
+    toolCall: parsed.requests?.[0]?.name ?? null,
+  };
+}
 
-  // Build pattern: ```tool:<name> ... ```
-  const namePattern = toolNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const re = new RegExp('(```tool:(' + namePattern + ')\\s*\\n[\\s\\S]*?```)', 'm');
-  const match = text.match(re);
-  if (!match) return { text, toolCall: null };
+/**
+ * Validate that a response contains a well-formed ```response``` JSON block.
+ * Returns an error string if invalid, or null if valid (or no block present).
+ */
+export function validateResponseBlock(text: string): string | null {
+  // Find JSON — either raw or inside ```response fences (backward compat)
+  const jsonContent = extractBalancedJson(text, 0);
+  if (!jsonContent) {
+    // Only flag as error if the text looks like it was trying to be JSON
+    if (text.includes('"type"') || text.includes('"message"') || text.includes('"requests"')) {
+      return `Response appears to contain JSON but no valid JSON object was found`;
+    }
+    return null; // Plain text — nothing to validate
+  }
 
-  // Keep everything up to and including the tool block, drop the rest
-  const idx = text.indexOf(match[0]);
-  const truncated = text.slice(0, idx + match[0].length).trimEnd();
-  return { text: truncated, toolCall: match[2] };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonContent);
+  } catch (e: any) {
+    return `Invalid JSON: ${e.message}. Raw content: ${jsonContent.slice(0, 200)}`;
+  }
+
+  if (!parsed.type) {
+    return `Missing "type" field. Got: ${JSON.stringify(parsed).slice(0, 200)}`;
+  }
+
+  if (parsed.type === 'message') {
+    if (typeof parsed.content !== 'string') {
+      return `"message" type requires a "content" string field`;
+    }
+  } else if (parsed.type === 'requests') {
+    if (!Array.isArray(parsed.requests)) {
+      return `"requests" type requires a "requests" array field`;
+    }
+    for (let i = 0; i < parsed.requests.length; i++) {
+      const r = parsed.requests[i];
+      if (!r || typeof r.name !== 'string') {
+        return `requests[${i}] must have a "name" string field`;
+      }
+    }
+  } else if (parsed.type === 'request') {
+    // Single request format — accepted for backwards compat
+    if (typeof parsed.name !== 'string') {
+      return `"request" type requires a "name" string field`;
+    }
+  } else {
+    return `Unknown type "${parsed.type}". Must be "message" or "requests"`;
+  }
+
+  return null;
 }
 
 /** Log a message to the workspace's .session-log directory */
@@ -163,19 +300,23 @@ export class ClaudeSession implements CodingAgent {
     // Merge persistent + ephemeral tools for this turn
     const allTools = [...this.tools, ...(ephemeralTools ?? [])];
 
-    const response = usesSdk()
+    let response = usesSdk()
       ? await this.sendSdk(message, images, allTools)
       : await this.sendCli(message, images, allTools);
 
-    // Truncate hallucinated content after tool calls
+    // Parse ```response``` block and extract structured data
     if (allTools.length > 0) {
-      const { text, toolCall } = truncateAfterToolCall(
-        response.result,
-        allTools.map(t => t.name),
-      );
-      if (toolCall) {
-        response.result = text;
+      // Validate JSON — retry up to 3 times if malformed
+      const validationError = validateResponseBlock(response.result);
+      if (validationError) {
+        response = await this.retryForValidResponse(response, allTools, validationError);
       }
+
+      // Parse the response block into structured fields
+      const toolNames = allTools.map(t => t.name);
+      const parsed = parseResponseBlock(response.result, toolNames);
+      response.result = parsed.text;
+      response.requests = parsed.requests;
     }
 
     this.sessionId = response.sessionId;
@@ -187,6 +328,54 @@ export class ClaudeSession implements CodingAgent {
       timestamp: Date.now(),
     });
     logMessage(this.workingDir, "assistant", response.result);
+
+    return response;
+  }
+
+  /**
+   * Retry when Claude returns a ```response``` block with invalid JSON.
+   * Sends a correction message and retries up to 3 times.
+   */
+  private async retryForValidResponse(
+    lastResponse: AgentResponse,
+    allTools: SessionTool[],
+    error: string,
+    attempt: number = 1,
+  ): Promise<AgentResponse> {
+    if (attempt > 3) {
+      console.warn(`[response-retry] Gave up after 3 attempts. Last error: ${error}`);
+      return lastResponse;
+    }
+
+    console.log(`[response-retry] Attempt ${attempt}/3: ${error}`);
+
+    // Store the failed assistant response in history so the session has context
+    this.sessionId = lastResponse.sessionId;
+    this.history.push({
+      role: "assistant",
+      content: lastResponse.result,
+      durationMs: lastResponse.durationMs,
+      costUsd: lastResponse.costUsd,
+      timestamp: Date.now(),
+    });
+
+    const correctionMessage = `Your last response was not valid JSON: ${error}. Please try again — your ENTIRE response must be a single raw JSON object with no markdown fences or other text. It must be either {"type": "message", "content": "..."} or {"type": "requests", "requests": [{"name": "...", "params": {...}}]}.`;
+
+    this.history.push({ role: "user", content: correctionMessage, timestamp: Date.now() });
+    logMessage(this.workingDir, "user", correctionMessage);
+
+    let response = usesSdk()
+      ? await this.sendSdk(correctionMessage, undefined, allTools)
+      : await this.sendCli(correctionMessage, undefined, allTools);
+
+    // Accumulate cost/duration
+    response.durationMs += lastResponse.durationMs;
+    response.costUsd += lastResponse.costUsd;
+
+    const nextError = validateResponseBlock(response.result);
+    if (nextError) {
+      return this.retryForValidResponse(response, allTools, nextError, attempt + 1);
+    }
 
     return response;
   }
@@ -369,21 +558,20 @@ export class ClaudeSession implements CodingAgent {
       "--append-system-prompt", buildSystemPrompt(this.workingDir, allTools),
     ];
 
-    if (!hasSessionTools) {
-      args.push("--allowedTools", ...ALLOWED_TOOL_PATTERNS);
-    }
-
-    // When session tools are defined, use --bare + --strict-mcp-config with an
-    // empty config to prevent Claude from loading plugins/MCP servers that
-    // compete with text-based session tools.
     if (hasSessionTools) {
-      args.push("--bare", "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config");
-    }
-
-    // Only load MCP config if no session tools are defined — otherwise Claude
-    // tries to use MCP tools (which get blocked) instead of text-based session tools.
-    if (this.mcpConfig && (!allTools || allTools.length === 0)) {
-      args.push("--mcp-config", this.mcpConfig);
+      // When session tools are defined, block ALL MCP servers and plugins so
+      // Claude only sees built-in tools + the text-based session tools.
+      // --strict-mcp-config with empty config blocks .mcp.json and env-level MCP servers.
+      // --setting-sources "" skips user/project/local settings (disables plugins).
+      args.push(
+        "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
+        "--setting-sources", "",
+      );
+    } else {
+      args.push("--allowedTools", ...ALLOWED_TOOL_PATTERNS);
+      if (this.mcpConfig) {
+        args.push("--mcp-config", this.mcpConfig);
+      }
     }
     args.push(...this.extraArgs);
     if (this.sessionId) {
