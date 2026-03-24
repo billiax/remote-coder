@@ -79,7 +79,7 @@ export function buildSystemPrompt(dir: string, tools?: SessionTool[]): string {
     lines.push(`2. Wait for [TOOL RESULT: <tool_name>] in the next user message before continuing.`);
     lines.push(`3. You may include brief text BEFORE a tool call to explain what you're doing.`);
     lines.push(`4. Never invent tool output. If you don't have a result, you haven't called the tool yet.`);
-    lines.push(`5. These tool definitions are persistent for this session and survive compaction.`);
+    lines.push(`5. These tool definitions survive compaction.`);
   }
 
   return lines.join("\n");
@@ -151,19 +151,22 @@ export class ClaudeSession implements CodingAgent {
   setTools(tools: SessionTool[]): void { this.tools = tools; }
   getTools(): SessionTool[] { return this.tools; }
 
-  async send(message: string, images?: ImageInput[], imageUrls?: string[]): Promise<AgentResponse> {
+  async send(message: string, images?: ImageInput[], imageUrls?: string[], ephemeralTools?: SessionTool[]): Promise<AgentResponse> {
     this.history.push({ role: "user", content: message, timestamp: Date.now(), imageUrls });
     logMessage(this.workingDir, "user", message);
 
+    // Merge persistent + ephemeral tools for this turn
+    const allTools = [...this.tools, ...(ephemeralTools ?? [])];
+
     const response = usesSdk()
-      ? await this.sendSdk(message, images)
-      : await this.sendCli(message, images);
+      ? await this.sendSdk(message, images, allTools)
+      : await this.sendCli(message, images, allTools);
 
     // Truncate hallucinated content after tool calls
-    if (this.tools.length > 0) {
+    if (allTools.length > 0) {
       const { text, toolCall } = truncateAfterToolCall(
         response.result,
-        this.tools.map(t => t.name),
+        allTools.map(t => t.name),
       );
       if (toolCall) {
         response.result = text;
@@ -205,7 +208,7 @@ export class ClaudeSession implements CodingAgent {
 
   // ─── SDK path (ANTHROPIC_API_KEY) ───
 
-  private async sendSdk(message: string, images?: ImageInput[]): Promise<AgentResponse> {
+  private async sendSdk(message: string, images?: ImageInput[], allTools?: SessionTool[]): Promise<AgentResponse> {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const start = Date.now();
 
@@ -215,7 +218,7 @@ export class ClaudeSession implements CodingAgent {
       tools: AVAILABLE_TOOLS,
       allowedTools: ALLOWED_TOOL_PATTERNS,
       permissionMode: "dontAsk" as const,
-      systemPrompt: buildSystemPrompt(this.workingDir, this.tools),
+      systemPrompt: buildSystemPrompt(this.workingDir, allTools),
     };
 
     if (this.sessionId) {
@@ -322,7 +325,7 @@ export class ClaudeSession implements CodingAgent {
 
   // ─── CLI path (CLAUDE_CODE_OAUTH_TOKEN) ───
 
-  private async sendCli(message: string, images?: ImageInput[]): Promise<AgentResponse> {
+  private async sendCli(message: string, images?: ImageInput[], allTools?: SessionTool[]): Promise<AgentResponse> {
     // If images are present, save them in the workspace so Claude can Read them
     let effectiveMessage = message;
     const tempFiles: string[] = [];
@@ -350,7 +353,7 @@ export class ClaudeSession implements CodingAgent {
       "--tools", AVAILABLE_TOOLS.join(","),
       "--allowedTools", ...ALLOWED_TOOL_PATTERNS,
       "--permission-mode", "dontAsk",
-      "--append-system-prompt", buildSystemPrompt(this.workingDir, this.tools),
+      "--append-system-prompt", buildSystemPrompt(this.workingDir, allTools),
     ];
 
     if (this.mcpConfig) {

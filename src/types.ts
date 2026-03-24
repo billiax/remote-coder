@@ -41,7 +41,7 @@ export interface AgentOptions {
 }
 
 export interface CodingAgent {
-  send(message: string, images?: ImageInput[], imageUrls?: string[]): Promise<AgentResponse>;
+  send(message: string, images?: ImageInput[], imageUrls?: string[], ephemeralTools?: SessionTool[]): Promise<AgentResponse>;
   compact(): Promise<AgentResponse>;
   getSessionId(): string | null;
   getWorkingDir(): string;

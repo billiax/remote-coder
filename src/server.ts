@@ -194,23 +194,11 @@ app.post("/chat", async (req: Request, res: Response<ChatResponse | ErrorRespons
     }
   }
 
-  // Tools in /chat are ephemeral — prepend to message for this turn only
-  let effectiveMessage = message;
-  if (tools && Array.isArray(tools) && tools.length > 0) {
-    const toolBlock = tools.map(t => {
-      let desc = `- **${t.name}**: ${t.description}`;
-      if (t.parameters) {
-        desc += '\n' + Object.entries(t.parameters)
-          .map(([k, v]: [string, any]) => `  - ${k} (${v.type}${v.required ? ', required' : ''}): ${v.description ?? ''}`)
-          .join('\n');
-      }
-      return desc;
-    }).join('\n');
-    effectiveMessage = `[Available tools for this message]\n${toolBlock}\n\n${message}`;
-  }
+  // Ephemeral tools are passed through to the agent's system prompt for this turn
+  const ephemeralTools = (tools && Array.isArray(tools) && tools.length > 0) ? tools : undefined;
 
   try {
-    const result = await agent.send(effectiveMessage, images, imageUrls);
+    const result = await agent.send(message, images, imageUrls, ephemeralTools);
 
     if (!sessions.has(result.sessionId)) {
       sessions.set(result.sessionId, agent);
